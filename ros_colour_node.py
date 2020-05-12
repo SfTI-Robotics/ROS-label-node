@@ -3,6 +3,7 @@ import rospy
 from sensor_msgs.msg import Image
 from std_msgs.msg import UInt8MultiArray
 
+import ros_numpy
 import numpy as np
 import numpy as np 
 import time
@@ -31,6 +32,7 @@ from detectron2.structures import Boxes, RotatedBoxes
 from detectron2.data import MetadataCatalog
 
 import torch, torchvision
+
 
 # Resolution of camera streams
 RESOLUTION_X = 640
@@ -64,21 +66,21 @@ class VideoStreamer:
 
     def callback(self, msg):
         if not self.retrieved:
-            data = list(msg.data)
-            array = np.asanyarray(data).reshape(RESOLUTION_Y, RESOLUTION_X, 3)[:,:,::-1]
-            self.color_image = array
+            data = ros_numpy.numpify(msg)
+            self.color_image = data[:,:,::-1]
             self.retrieved = True
     
     def set_not_retrieved(self):
         self.retrieved = False
 
     def publish(self, image):
-        msg = UInt8MultiArray()
-        msg.data = image.flatten()
-        self._pub.publish(msg)
+        img_list = ros_numpy.msgify(Image, image, encoding='rgb8')
+
+        self._pub.publish(img_list)
 
 class Predictor(DefaultPredictor):
-    def __init__(self):
+    def __init__(self, pub):
+        self._pub = pub
         self.config = self.setup_predictor_config()
         super().__init__(self.config)
 
@@ -132,8 +134,12 @@ class Predictor(DefaultPredictor):
 
         boxes_list = np.array(boxes_list)
 
-        return (masks, boxes, boxes_list, labels, scores_list, class_list)    
+        return (masks, boxes, boxes_list, labels, scores_list, class_list, classes)
 
+    def publish(self, mask):
+        img_list = ros_numpy.msgify(Image, mask, encoding='mono8')
+
+        self._pub.publish(img_list)
 
 
 class OptimizedVisualizer(Visualizer):
@@ -161,12 +167,13 @@ class DetectedObject:
     of the object.
     masks[i], boxes[i], labels[i], scores_list[i], class_list[i]
     """
-    def __init__(self, mask, box, label, score, class_name):
+    def __init__(self, mask, box, label, score, class_name, class_index):
         self.mask = mask
         self.box = box
         self.label = label
         self.score = score
         self.class_name = class_name
+        self.class_index = class_index
 
     def __str__(self):
         ret_str = "The pixel mask of {} represents a {} and is {}m away from the camera.\n".format(self.mask, self.class_name, self.distance)
@@ -270,10 +277,11 @@ if __name__ == "__main__":
 
     rospy.init_node('ros_colour')
 
-    pub = rospy.Publisher('labelled_image', UInt8MultiArray, queue_size=1)
+    pub = rospy.Publisher('labelled_image', Image, queue_size=1)
+    mask_pub = rospy.Publisher('label_mask', Image, queue_size=1)
 
     # Initialise Detectron2 predictor
-    predictor = Predictor()
+    predictor = Predictor(mask_pub)
 
     # Initialise video streams from D435
     video_streamer = VideoStreamer(pub)
@@ -320,16 +328,20 @@ if __name__ == "__main__":
         # Create a new Visualizer object from Detectron2 
         v = OptimizedVisualizer(color_image[:, :, ::-1], MetadataCatalog.get(predictor.config.DATASETS.TRAIN[0]))
         
-        masks, boxes, boxes_list, labels, scores_list, class_list = predictor.format_results(v.metadata.get("thing_classes"))
+        masks, boxes, boxes_list, labels, scores_list, class_list, classes = predictor.format_results(v.metadata.get("thing_classes"))
 
         for i in range(num_masks):
             try:
-                detected_obj = DetectedObject(masks[i], boxes[i], labels[i], scores_list[i], class_list[i])
+                detected_obj = DetectedObject(masks[i], boxes[i], labels[i], scores_list[i], class_list[i], classes[i].item())
             except:
                 print("Object doesn't meet all parameters")
             
             detected_objects.append(detected_obj)
 
+        added_masks = np.zeros((RESOLUTION_Y, RESOLUTION_X), dtype='uint8')
+
+        for i in detected_objects:
+            added_masks += (i.mask.mask * (i.class_index + 1))
 
         tracked_objects = mot_tracker.update(boxes_list)
 
@@ -439,6 +451,7 @@ if __name__ == "__main__":
         #depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
         #cv2.imshow('Segmented Image', color_image)
         cv2.imshow('Segmented Image', v.output.get_image()[:,:,::-1])
+        predictor.publish(added_masks)
         video_streamer.publish(v.output.get_image()[:,:,::-1])
         video_streamer.set_not_retrieved()
         #cv2.imshow('Depth', depth_colormap)
