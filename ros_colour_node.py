@@ -48,7 +48,7 @@ AXES_SIZE = 10
 
 class VideoStreamer:
     """
-    Video streamer that takes advantage of multi-threading, and continuously is reading frames.
+    Video streamer that continuously is reading frames through subscribing to d435 images.
     Frames are then ready to read when program requires.
     """
     def __init__(self, pub, video_file=None):
@@ -61,9 +61,6 @@ class VideoStreamer:
     def read(self):
         return self.color_image
 
-    #def _publish(self, pub):
-
-
     def callback(self, msg):
         if not self.retrieved:
             data = ros_numpy.numpify(msg)
@@ -74,6 +71,7 @@ class VideoStreamer:
         self.retrieved = False
 
     def publish(self, image):
+        # Convert image array to Image from sensor_msgs
         img_list = ros_numpy.msgify(Image, image, encoding='rgb8')
 
         self._pub.publish(img_list)
@@ -137,6 +135,7 @@ class Predictor(DefaultPredictor):
         return (masks, boxes, boxes_list, labels, scores_list, class_list, classes)
 
     def publish(self, mask):
+        # Publish label array
         img_list = ros_numpy.msgify(Image, mask, encoding='mono8')
 
         self._pub.publish(img_list)
@@ -144,7 +143,8 @@ class Predictor(DefaultPredictor):
 
 class OptimizedVisualizer(Visualizer):
     """
-    Detectron2's altered Visualizer class which converts boxes tensor to cpu
+    Detectron2's altered Visualizer class which converts boxes tensor to cpu. The original
+    doesn't do this, but it only works for me if I do this.
     """
     def __init__(self, img_rgb, metadata, scale=1.0, instance_mode=ColorMode.IMAGE):
         super().__init__(img_rgb, metadata, scale, instance_mode)
@@ -176,6 +176,9 @@ class DetectedObject:
         self.class_index = class_index
 
     def __str__(self):
+        """
+        Printing for debugging purposes
+        """
         ret_str = "The pixel mask of {} represents a {} and is {}m away from the camera.\n".format(self.mask, self.class_name, self.distance)
         if hasattr(self, 'track'):
             if hasattr(self.track, 'speed'):
@@ -199,7 +202,7 @@ class DetectedObject:
 
 class Arrow3D(FancyArrowPatch):
     """
-    Arrow used to demonstrate direction of travel for each object
+    Arrow used to demonstrate direction of travel for each object. Only for debugging/visualisation.
     """
     def __init__(self, xs, ys, zs, *args, **kwargs):
         FancyArrowPatch.__init__(self, (0,0), (0,0), *args, **kwargs)
@@ -215,7 +218,7 @@ class Arrow3D(FancyArrowPatch):
 
 def find_mask_centre(mask, color_image):
     """
-    Finding centre of mask using moments
+    Finding centre of mask of object
     """
     moments = cv2.moments(np.float32(mask))
 
@@ -232,7 +235,7 @@ def find_median_depth(mask_area, num_median, histg):
     """
     
     median_counter = 0
-    centre_depth = "0.00"
+    centre_depth = 0.0
     for x in range(0, len(histg)):
         median_counter += histg[x][0]
         if median_counter >= num_median:
@@ -241,7 +244,7 @@ def find_median_depth(mask_area, num_median, histg):
             centre_depth = x / 50
             break 
 
-    return float(centre_depth)
+    return centre_depth
 
 def debug_plots(color_image, depth_image, mask, histg, depth_colormap):
     """
@@ -277,6 +280,7 @@ if __name__ == "__main__":
 
     rospy.init_node('ros_colour')
 
+    # ROS topics for image with superimposed mask and label (8-bit int) mask
     pub = rospy.Publisher('labelled_image', Image, queue_size=1)
     mask_pub = rospy.Publisher('label_mask', Image, queue_size=1)
 
@@ -291,21 +295,26 @@ if __name__ == "__main__":
 
     speed_time_start = time.time()
 
-
-    
+    """
+    This is the ROS topic to get colour image from. If no image is being found, type
+    'rostopic list' in the console to find available topics. It may be called 
+    '/d400/color/image_raw' instead. To find info about object such as location/velocity,
+    create new subscriber to find the d435 depth data.
+    """
     rospy.Subscriber("/d435/color/image_raw", Image, video_streamer.callback)
     time.sleep(1)
+
     while True:
         
         time_start = time.time()
         color_image = video_streamer.read()
-        #print(len(color_image), len(color_image[0]), len(color_image[0][0]))
         detected_objects = []
 
         t1 = time.time()
 
         camera_time = t1 - time_start
         
+        # Run image through instance segmentation
         predictor.create_outputs(color_image)
         outputs = predictor.outputs
 
@@ -315,7 +324,6 @@ if __name__ == "__main__":
 
         predictions = outputs['instances']
         
-
         if outputs['instances'].has('pred_masks'):
             num_masks = len(predictions.pred_masks)
         else:
@@ -338,14 +346,14 @@ if __name__ == "__main__":
             
             detected_objects.append(detected_obj)
 
+        # Next 3 lines create label array
         added_masks = np.zeros((RESOLUTION_Y, RESOLUTION_X), dtype='uint8')
-
         for i in detected_objects:
             added_masks += (i.mask.mask * (i.class_index + 1))
 
         tracked_objects = mot_tracker.update(boxes_list)
 
-        
+        # Create colour image with labelled mask on top
         v.overlay_instances(
             masks=masks,
             boxes=boxes,
@@ -448,13 +456,13 @@ if __name__ == "__main__":
         #for i in detected_objects:
             #print(i)
         """
-        #depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-        #cv2.imshow('Segmented Image', color_image)
+
         cv2.imshow('Segmented Image', v.output.get_image()[:,:,::-1])
+        
         predictor.publish(added_masks)
         video_streamer.publish(v.output.get_image()[:,:,::-1])
         video_streamer.set_not_retrieved()
-        #cv2.imshow('Depth', depth_colormap)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         
