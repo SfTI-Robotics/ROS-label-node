@@ -16,7 +16,10 @@ In this project, the node is subscribed to real-time video and depth values from
   Please ensure that your version of CUDA is also compatible when installing.
 - OpenCV `pip install opencv-python`
 - PyRealSense `pip install pyrealsense2`
-- pycocotools: `pip install cython; pip install 'git+https://github.com/cocodataset/cocoapi.git#subdirectory=PythonAPI'`
+- Pycocotools: `pip install cython; pip install 'git+https://github.com/cocodataset/cocoapi.git#subdirectory=PythonAPI'`
+- ROS Kinetic/Melodic
+- [Intel RealSense ROS wrapper](https://github.com/IntelRealSense/realsense-ros)
+- [Catkin](www.ros.org/wiki/catkin#Installing_catkin)
 - gcc & g++ ≥ 4.9
 
 **Installation**
@@ -25,11 +28,19 @@ For the installation of Detectron2 and its dependencies, please refer to the [of
 
 **After Installation**
 
-* Copy and paste main.py from this directory into your new Detectron2 directory.
+* Copy and paste ros_colour_node.py, sort.py and ros_numpy from this directory into your new Detectron2 directory.
+* [Create a catkin workspace](http://wiki.ros.org/catkin/Tutorials/create_a_workspace) and move your directory in the source folder
+* Ensure ros_colour_node.py is executable. Type `chmod +x ~/catkin_ws/src/ROS-label-node/ros_colour_node.py`
 * To perform instance segmentation straight from a D435 camera attached to a USB port:
-  * Access the Detectron2 directory and type 'python3 main.py'. 
-* If using .bag files:
-  * Type 'python3 main.py --file={filename}' where {filename} is the name of the input .bag file. To create .bag files, use d435_to_file.py in the tools folder.
+  * Type `roslaunch realsense2_camera rs_d400_and_t265.launch`
+  * In a new terminal window, type `rosrun ROS-label-node ros_colour_node.py`
+  * If there are any complications, make sure the topic this node is subscribed to has the same name. Type `rostopic list` to see current
+    topics published
+* If implementing this node with the OctoMap library:
+  * Type `roslaunch octomap_server octomap_mapping.launch` (Please ensure that the file rs_d400_and_t265.launch file is in the launch folder)
+  * In a new terminal window, type `rosrun ROS-label-node ros_colour_node.py`
+
+* To find the published label mask, in a new terminal type `rostopic echo /label_mask`
 
 ## Accuracy and Specifications of Model
 
