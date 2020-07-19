@@ -2,6 +2,10 @@ This is a fork of [instance segmentation](https://github.com/ErikGDev/instance-s
 [Detectron](https://github.com/facebookresearch/Detectron/),
 and it originates from [maskrcnn-benchmark](https://github.com/facebookresearch/maskrcnn-benchmark/). This Mask R-CNN implementation is powered by [PyTorch](https://pytorch.org) and is based on Feature Pyramid Network (FPN) and a ResNet101 backbone.
 
+<div>
+  <img src="images/gif.gif"/>
+</div>
+
 In this project, the node is subscribed to real-time video and depth values from a [Intel® RealSense™ D435 camera.](https://www.intelrealsense.com/depth-camera-d435/) This is then inputted into Detectron2's Mask R-CNN model. At the moment, the output is an 8-bit integer mask where each integer represents the ID of the object located for each pixel. [Here](https://github.com/amikelive/coco-labels/blob/master/coco-labels-2014_2017.txt) is a list of objects detected. This node can also capture information about each detected object. This includes object's 3D position, velocity (if it is tracked over several frames), ID, and time until impact. For all possible outputs, please look at the non-ROS [instance-segmentation repository](https://github.com/ErikGDev/instance-segmentation). 
 
 ## Usage
