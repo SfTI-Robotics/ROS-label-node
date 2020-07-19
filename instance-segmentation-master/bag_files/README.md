@@ -1,1 +1,0 @@
-Place .bag files in here to perform instance segmentation. To create .bag files, use d435_to_file.py in the tools folder.
