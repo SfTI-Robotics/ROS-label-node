@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import rospy
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import UInt8MultiArray
 
 import ros_numpy
@@ -52,23 +53,48 @@ class VideoStreamer:
     Frames are then ready to read when program requires.
     """
     def __init__(self, pub, video_file=None):
-        """
-        When initialised, VideoStreamer object should be reading frames
-        """
         self._pub = pub
-        self.retrieved = False
+        self.colour_retrieved = False
+        self.depth_retrieved = False
+        self.intrin_retrieved = False
 
     def read(self):
-        return self.color_image
+        return (self.color_image, self.depth_image)
 
-    def callback(self, msg):
-        if not self.retrieved:
+    def colour_callback(self, msg):
+        if not self.colour_retrieved:
             data = ros_numpy.numpify(msg)
             self.color_image = data[:,:,::-1]
-            self.retrieved = True
+            self.colour_retrieved = True
     
+    def depth_callback(self, msg):
+        if not self.depth_retrieved:
+            data = ros_numpy.numpify(msg)
+            self.depth_image = data
+            self.depth_retrieved = True
+
+    def intrin_callback(self, cameraInfo):
+        """
+        D435 camera intrinsic values can be derived from CameraInfo ROS message.
+        """
+        if not self.intrin_retrieved:
+            self.intrin = rs.intrinsics()
+            self.intrin.width = cameraInfo.width
+            self.intrin.height = cameraInfo.height
+            self.intrin.ppx = cameraInfo.K[2]
+            self.intrin.ppy = cameraInfo.K[5]
+            self.intrin.fx = cameraInfo.K[0]
+            self.intrin.fy = cameraInfo.K[4]
+            #self.intrin.model = cameraInfo.distortion_model
+            self.intrin.model  = rs.distortion.none     
+            self.intrin.coeffs = [i for i in cameraInfo.D]
+            self.intrin_retrieved = True
+
+
     def set_not_retrieved(self):
-        self.retrieved = False
+        self.colour_retrieved = False
+        self.depth_retrieved = False
+        self.intrin_retrieved = False
 
     def publish(self, image):
         # Convert image array to Image from sensor_msgs
@@ -296,18 +322,20 @@ if __name__ == "__main__":
     speed_time_start = time.time()
 
     """
-    This is the ROS topic to get colour image from. If no image is being found, type
+    This is the ROS topic to get images from. If no image is being found, type
     'rostopic list' in the console to find available topics. It may be called 
-    '/d400/color/image_raw' instead. To find info about object such as location/velocity,
-    create new subscriber to find the d435 depth data.
+    '/d400/color/image_raw' instead.
     """
-    rospy.Subscriber("/d435/color/image_raw", Image, video_streamer.callback)
+    rospy.Subscriber("/d435/color/image_raw/", Image, video_streamer.colour_callback)
+    rospy.Subscriber("/d435/aligned_depth_to_color/image_raw", Image, video_streamer.depth_callback)
+    rospy.Subscriber("/d435/aligned_depth_to_color/camera_info", CameraInfo, video_streamer.intrin_callback)
+    #rospy.Subscriber("/d435/color/image_raw/d435/aligned_depth_to_color/image_raw", Image, video_streamer.callback)
     time.sleep(1)
 
     while True:
         
         time_start = time.time()
-        color_image = video_streamer.read()
+        color_image, depth_image = video_streamer.read()
         detected_objects = []
 
         t1 = time.time()
@@ -362,7 +390,7 @@ if __name__ == "__main__":
             assigned_colors=None,
             alpha=0.3
         )
-        """
+
         speed_time_end = time.time()
         total_speed_time = speed_time_end - speed_time_start
         speed_time_start = time.time()
@@ -381,6 +409,9 @@ if __name__ == "__main__":
             #debug_plots(color_image, depth_image, masks[i].mask, histg, depth_colormap)
             
             centre_depth = find_median_depth(mask_area, num_median, histg)
+            if detected_objects[i].class_index == 0 and centre_depth < 1.0:
+                print("Person detected who is closer than 1m")
+
             detected_objects[i].distance = centre_depth
             cX, cY = find_mask_centre(detected_objects[i].mask._mask, v.output)
 
@@ -398,13 +429,16 @@ if __name__ == "__main__":
 
                             mot_tracker.trackers[track].set_impact_time(centre_depth)
 
+
                             if mot_tracker.trackers[track].impact_time != False and mot_tracker.trackers[track].impact_time >= 0:
+                                if detected_objects[i].class_index == 0 and mot_tracker.trackers[track].impact_time < 2.0:
+                                    print("Person detected to impact with robot within 2 seconds")
                                 v.draw_text("{:.2f} seconds to impact".format(mot_tracker.trackers[track].impact_time), (cX, cY + 60))
                         
                         if hasattr(mot_tracker.trackers[track], 'position'):
                             # New 3D coordinates for current frame
                             x1, y1, z1 = rs.rs2_deproject_pixel_to_point(
-                            video_streamer.depth_intrin, [cX, cY], centre_depth
+                            video_streamer.intrin, [cX, cY], centre_depth
                         )
                             
                             # Update states for tracked object
@@ -416,29 +450,8 @@ if __name__ == "__main__":
 
                             v.draw_text("{:.2f}m/s".format(detected_objects[i].track.velocity), (cX, cY + 40))
 
-                            relative_x = (cX - 64) / RESOLUTION_X
-                            relative_y = (abs(RESOLUTION_Y - cY) - 36) / RESOLUTION_Y
-
-                            
-                            # Show velocity vector arrow if velocity >= 1 m/s
-                            
-                            if detected_objects[i].track.velocity >= 1:
-                                ax = v.output.fig.add_axes([relative_x, relative_y, 0.1, 0.1], projection='3d')
-                                ax.set_xlim([-AXES_SIZE, AXES_SIZE])
-                                ax.set_ylim([-AXES_SIZE, AXES_SIZE])
-                                ax.set_zlim([-AXES_SIZE, AXES_SIZE])
-                                
-                                #print(v_points)
-                                detected_objects[i].create_vector_arrow()
-                                a = Arrow3D([0, detected_objects[i].track.v_points[0]], [0, detected_objects[i].track.v_points[1]], [0, detected_objects[i].track.v_points[2]], mutation_scale=10, lw=1, arrowstyle="-|>", color="w")
-                                ax.add_artist(a)
-                                #ax.axis("off")
-                                ax.set_facecolor((1, 1, 1, 0))
-                                v.output.fig.add_axes(ax)
-                            
-
                         position = rs.rs2_deproject_pixel_to_point(
-                            video_streamer.depth_intrin, [cX, cY], centre_depth
+                            video_streamer.intrin, [cX, cY], centre_depth
                         )    
                             
                         mot_tracker.trackers[track].set_distance(centre_depth)
@@ -455,7 +468,6 @@ if __name__ == "__main__":
 
         #for i in detected_objects:
             #print(i)
-        """
 
         cv2.imshow('Segmented Image', v.output.get_image()[:,:,::-1])
         
@@ -469,7 +481,7 @@ if __name__ == "__main__":
         time_end = time.time()
         total_time = time_end - time_start
 
-        print("Time to process frame: {:.2f}".format(total_time))
-        print("FPS: {:.2f}\n".format(1/total_time))
+        #print("Time to process frame: {:.2f}".format(total_time))
+        #print("FPS: {:.2f}\n".format(1/total_time))
         
     cv2.destroyAllWindows()
